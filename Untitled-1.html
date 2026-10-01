@@ -1,0 +1,300 @@
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Brick Breaker — Tech Fest Edition</title>
+    
+    <!-- Load TensorFlow Handpose engine securely from CDN -->
+    <script src="https://unpkg.com"></script>
+
+    <style>
+        :root {
+            --bg-space: #070a13;
+            --panel-glass: rgba(19, 28, 48, 0.85);
+            --neon-green: #39ff14;
+            --neon-blue: #00f0ff;
+            --text-white: #f8fafc;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-space);
+            color: var(--text-white);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        header {
+            text-align: center;
+            margin: 20px 0 10px 0;
+        }
+
+        h1 {
+            color: var(--neon-blue);
+            font-size: 2.2rem;
+            margin: 0;
+            letter-spacing: 1.5px;
+            text-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+        }
+
+        .tagline {
+            color: #94a3b8;
+            font-size: 0.9rem;
+            margin-top: 4px;
+        }
+
+        .game-layout {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            width: 100%;
+            max-width: 900px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        @media (min-width: 768px) {
+            .game-layout {
+                flex-direction: row;
+                justify-content: center;
+                align-items: flex-start;
+            }
+        }
+
+        /* The Game Screen */
+        canvas {
+            background-color: #0b0f19;
+            border: 3px solid var(--neon-blue);
+            border-radius: 12px;
+            box-shadow: 0 0 25px rgba(0, 240, 255, 0.2);
+        }
+
+        /* Sidebar AI Tracking HUD */
+        .sidebar-hud {
+            background: var(--panel-glass);
+            border: 1px solid #1e293b;
+            border-radius: 12px;
+            padding: 15px;
+            width: 100%;
+            max-width: 320px;
+            box-sizing: border-box;
+        }
+
+        .camera-preview {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4/3;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--neon-green);
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror camera feed */
+        }
+
+        .hud-log {
+            margin-top: 15px;
+            font-size: 0.85rem;
+            color: #94a3b8;
+            line-height: 1.4;
+        }
+
+        .score-board {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--neon-green);
+            text-shadow: 0 0 8px rgba(57, 255, 20, 0.3);
+            margin-bottom: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>AI Motion Brick Breaker</h1>
+        <div class="tagline">Move your hand left & right to control the arcade paddle</div>
+    </header>
+
+    <div class="game-layout">
+        <!-- Main Interactive Game Board -->
+        <div>
+            <div class="score-board" id="score-text">SCORE: 0</div>
+            <canvas id="gameCanvas" width="480" height="400"></canvas>
+        </div>
+
+        <!-- AI Tracker Status Panel -->
+        <div class="sidebar-hud">
+            <div style="font-size: 0.8rem; text-transform: uppercase; margin-bottom: 8px; color: #64748b; font-weight: bold;">
+                AI Computer Vision Input
+            </div>
+            <div class="camera-preview">
+                <video id="webcam" autoplay playsinline muted></video>
+            </div>
+            <div class="hud-log">
+                <strong>Status:</strong> <span id="ai-status" style="color: #ef4444;">Loading TensorFlow Engine...</span><br>
+                <div style="margin-top: 8px; border-top: 1px solid #1e293b; padding-top: 8px;">
+                    <strong>Instructions:</strong> Hold up your hand clearly in front of the camera. The AI tracks your wrist point to instantly move the blue gaming block.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. GAME ENGINE PHYSICS LAYER ---
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreText = document.getElementById("score-text");
+
+        let score = 0;
+        let ballRadius = 8;
+        let x = canvas.width / 2;
+        let y = canvas.height - 30;
+        let dx = 3;
+        let dy = -3;
+
+        let paddleHeight = 12;
+        let paddleWidth = 90;
+        let paddleX = (canvas.width - paddleWidth) / 2;
+
+        // Brick Settings
+        let brickRowCount = 4;
+        let brickColumnCount = 5;
+        let brickWidth = 75;
+        let brickHeight = 20;
+        let brickPadding = 10;
+        let brickOffsetTop = 30;
+        let brickOffsetLeft = 30;
+
+        let bricks = [];
+        for (let c = 0; c < brickColumnCount; c++) {
+            bricks[c] = [];
+            for (let r = 0; r < brickRowCount; r++) {
+                bricks[c][r] = { x: 0, y: 0, status: 1 };
+            }
+        }
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
+            ctx.fillStyle = "#39ff14";
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawPaddle() {
+            ctx.beginPath();
+            ctx.rect(paddleX, canvas.height - paddleHeight - 5, paddleWidth, paddleHeight);
+            ctx.fillStyle = "#00f0ff";
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawBricks() {
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < brickRowCount; r++) {
+                    if (bricks[c][r].status === 1) {
+                        let brickX = (c * (brickWidth + brickPadding)) + brickOffsetLeft;
+                        let brickY = (r * (brickHeight + brickPadding)) + brickOffsetTop;
+                        bricks[c][r].x = brickX;
+                        bricks[c][r].y = brickY;
+                        ctx.beginPath();
+                        ctx.rect(brickX, brickY, brickWidth, brickHeight);
+                        ctx.fillStyle = "rgba(244, 63, 94, 0.8)";
+                        ctx.fill();
+                        ctx.closePath();
+                    }
+                }
+            }
+        }
+
+        function collisionDetection() {
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < brickRowCount; r++) {
+                    let b = bricks[c][r];
+                    if (b.status === 1) {
+                        if (x > b.x && x < b.x + brickWidth && y > b.y && y < b.y + brickHeight) {
+                            dy = -dy;
+                            b.status = 0;
+                            score += 10;
+                            scoreText.innerText = "SCORE: " + score;
+                            if (score === brickRowCount * brickColumnCount * 10) {
+                                alert("💥 CONGRATULATIONS! YOU WON THE TECH FEST MATCH!");
+                                document.location.reload();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function runGameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBricks();
+            drawBall();
+            drawPaddle();
+            collisionDetection();
+
+            // Wall Collisions
+            if (x + dx > canvas.width - ballRadius || x + dx < ballRadius) dx = -dx;
+            if (y + dy < ballRadius) dy = -dy;
+            
+            // Paddle Collision
+            if (y + dy > canvas.height - ballRadius - paddleHeight - 5) {
+                if (x > paddleX && x < paddleX + paddleWidth) {
+                    dy = -dy;
+                } else {
+                    alert("GAME OVER! Try again to beat the AI tracker.");
+                    document.location.reload();
+                    return;
+                }
+            }
+
+            x += dx;
+            y += dy;
+            requestAnimationFrame(runGameLoop);
+        }
+
+        // --- 2. TENSORFLOW INTELLIGENCE LAYER ---
+        const videoElement = document.getElementById("webcam");
+        const statusElement = document.getElementById("ai-status");
+        let handposeModel;
+
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                videoElement.srcObject = stream;
+                return new Promise((res) => videoElement.onloadedmetadata = () => res(videoElement));
+            } catch (err) {
+                statusElement.innerText = "Camera Access Blocked";
+            }
+        }
+
+        function loadAIModel() {
+            handposeModel = ml5.handpose(videoElement, () => {
+                statusElement.innerText = "Active & Tracking 🟢";
+                statusElement.style.color = "var(--neon-green)";
+                trackHandMovement();
+                runGameLoop(); // Start game physics only after AI boots completely
+            });
+        }
+
+        function trackHandMovement() {
+            handposeModel.on("predict", (results) => {
+                if (results && results.length > 0) {
+                    // Extract Wrist Position coordinates (Landmark Point 0)
+                    const wristX = results[0].landmarks[0][0]
